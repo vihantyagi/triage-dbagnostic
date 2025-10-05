@@ -11,48 +11,32 @@ from sqlalchemy import (
     String,
     Numeric,
     DateTime,
-    JSON,
     Float,
     Text,
     ForeignKey,
     DDL,
     event,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+# Removed PostgreSQL-specific import - using adapter pattern instead
+# from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
-from sqlalchemy.types import ARRAY, Enum
+from sqlalchemy.types import Enum
+# Removed ARRAY import - using adapter pattern instead
 from sqlalchemy.sql import func
 from sqlalchemy.ext.hybrid import hybrid_property
+
+# Import our database adapter-aware schema factory
+from ..database.schema_factory import json_column, array_column
 
 # One declarative_base object for each schema created
 Base = declarative_base()
 
-schemas = (
-    "CREATE SCHEMA IF NOT EXISTS triage_metadata;"
-    " CREATE SCHEMA IF NOT EXISTS test_results;"
-    " CREATE SCHEMA IF NOT EXISTS train_results;"
-    " CREATE SCHEMA IF NOT EXISTS triage_production;"
-)
+# Schema creation will be handled by the database adapter
+# This allows for database-specific schema creation syntax
 
-event.listen(Base.metadata, "before_create", DDL(schemas))
-
-group_proc_filename = os.path.join(
-    os.path.dirname(__file__), "sql", "model_group_stored_procedure.sql"
-)
-with open(group_proc_filename) as fd:
-    stmt = fd.read()
-
-event.listen(Base.metadata, "before_create", DDL(stmt))
-
-nuke_triage_filename = os.path.join(
-    os.path.dirname(__file__), "sql", "nuke_triage.sql"
-)
-with open(nuke_triage_filename) as fd:
-    stmt = fd.read()
-
-
-event.listen(Base.metadata, "before_create", DDL(stmt.replace('%', '%%')))
+# Database-specific setup (stored procedures, etc.) will be handled by the adapter
+# This removes PostgreSQL-specific dependencies
 
 
 class Experiment(Base):
@@ -64,7 +48,7 @@ class Experiment(Base):
             String,
             primary_key=True
     )
-    config = Column(JSONB)
+    config = json_column()
     time_splits = Column(Integer)
     as_of_times = Column(Integer)
     feature_blocks = Column(Integer)
@@ -83,7 +67,7 @@ class Retrain(Base):
             String,
             primary_key=True
     )
-    config = Column(JSONB)
+    config = json_column()
     prediction_date = Column(DateTime)
 
 
@@ -112,8 +96,8 @@ class TriageRun(Base):
     ec2_instance_type = Column(Text)
     log_location = Column(Text)
     experiment_class_path = Column(Text)
-    experiment_kwargs = Column(JSONB)
-    installed_libraries = Column(ARRAY(Text))
+    experiment_kwargs = json_column()
+    installed_libraries = array_column(Text)
     matrix_building_started = Column(DateTime)
     matrices_made = Column(Integer, default=0)
     matrices_skipped = Column(Integer, default=0)
@@ -137,7 +121,7 @@ class Subset(Base):
     __table_args__ = {"schema": "triage_metadata"}
 
     subset_hash = Column(String, primary_key=True)
-    config = Column(JSONB)
+    config = json_column()
     created_timestamp = Column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -148,9 +132,9 @@ class ModelGroup(Base):
 
     model_group_id = Column(Integer, primary_key=True)
     model_type = Column(Text)
-    hyperparameters = Column(JSONB)
-    feature_list = Column(ARRAY(Text))
-    model_config = Column(JSONB)
+    hyperparameters = json_column()
+    feature_list = array_column(Text)
+    model_config = json_column()
 
 
 class ListPrediction(Base):
@@ -214,11 +198,11 @@ class Matrix(Base):
     creation_time = Column(DateTime(timezone=True), server_default=func.now())
     lookback_duration = Column(Interval)
     feature_start_time = Column(DateTime)
-    matrix_metadata = Column(JSONB)
+    matrix_metadata = json_column()
     built_by_experiment = Column(
         String, ForeignKey("triage_metadata.experiments.experiment_hash")
     )
-    feature_dictionary = Column(JSONB)
+    feature_dictionary = json_column()
 
 
 class Model(Base):
@@ -234,10 +218,10 @@ class Model(Base):
     run_time = Column(DateTime)
     batch_run_time = Column(DateTime)
     model_type = Column(String)
-    hyperparameters = Column(JSONB)
+    hyperparameters = json_column()
     model_comment = Column(Text)
     batch_comment = Column(Text)
-    config = Column(JSON)
+    config = json_column()
     built_in_triage_run = Column(
         Integer, ForeignKey("triage_metadata.triage_runs.id"), nullable=True
     )
@@ -596,10 +580,4 @@ class TrainAequitas(Base):
     model_rel = relationship("Model")
 
 
-hash_partitioning_filename = os.path.join(
-    os.path.dirname(__file__), "sql", "predictions_hash_partitioning.sql"
-)
-with open(hash_partitioning_filename) as fd:
-    stmt = fd.read()
-
-event.listen(Base.metadata, "after_create", DDL(stmt))
+# Database-specific post-creation setup (partitioning, etc.) will be handled by the adapter

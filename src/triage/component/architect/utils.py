@@ -13,6 +13,7 @@ import subprocess
 import gzip
 
 import sqlalchemy
+from sqlalchemy import text
 
 import pandas as pd
 import numpy as np
@@ -48,24 +49,24 @@ def convert_string_column_to_date(column):
 
 
 def create_features_table(table_number, table, engine):
-    engine.execute(
-        """
-            create table features.features{} (
-                entity_id int, as_of_date date, f{} int, f{} int
-            )
-        """.format(
-            table_number, (table_number * 2) + 1, (table_number * 2) + 2
-        )
-    )
-    for row in table:
-        engine.execute(
+    with engine.begin() as conn:
+        conn.execute(text(
             """
-                insert into features.features{} values (%s, %s, %s, %s)
+                create table features.features{} (
+                    entity_id int, as_of_date date, f{} int, f{} int
+                )
             """.format(
-                table_number
-            ),
-            row,
-        )
+                table_number, (table_number * 2) + 1, (table_number * 2) + 2
+            )
+        ))
+        for row in table:
+            conn.execute(text(
+                """
+                    insert into features.features{} values (:p1, :p2, :p3, :p4)
+                """.format(
+                    table_number
+                )
+            ), {"p1": row[0], "p2": row[1], "p3": row[2], "p4": row[3]})
 
 
 def create_entity_date_df(
@@ -170,61 +171,108 @@ def fake_trained_model(project_path, model_storage_engine, db_engine):
     return trained_model, db_model.model_id
 
 
-def assert_index(engine, table, column):
+def assert_index(engine, table, column, db_adapter=None):
     """Assert that a table has an index on a given column
 
-    Does not care which position the column is in the index
-    Modified from https://www.gab.lc/articles/index_on_id_with_postgresql
+    Does not care which position the column is in the index.
+
+    This function checks if a database index exists on a specific column by querying
+    the database's system tables/views that store metadata about indexes.
 
     Args:
         engine (sqlalchemy.engine) a database engine
         table (string) the name of a table
         column (string) the name of a column
+        db_adapter (DatabaseAdapter, optional) database adapter for database-specific queries
     """
-    query = """
-        SELECT 1
-        FROM pg_class t
-             JOIN pg_index ix ON t.oid = ix.indrelid
-             JOIN pg_class i ON i.oid = ix.indexrelid
-             JOIN pg_attribute a ON a.attrelid = t.oid
-        WHERE
-             a.attnum = ANY(ix.indkey) AND
-             t.relkind = 'r' AND
-             t.relname = '{table_name}' AND
-             a.attname = '{column_name}'
-    """.format(
-        table_name=table, column_name=column
-    )
-    num_results = len([row for row in engine.execute(query)])
+    # Determine database type from engine URL if adapter not provided
+    db_url = str(engine.url).lower()
+
+    if 'postgresql' in db_url or 'postgres' in db_url:
+        # PostgreSQL query: Look in PostgreSQL's system catalogs
+        # pg_class = table of all database objects (tables, indexes, etc.)
+        # pg_index = table that maps indexes to their base tables
+        # pg_attribute = table of all columns in all tables
+        # This joins them to find indexes that contain our specific column
+        query = """
+            SELECT 1
+            FROM pg_class t
+                 JOIN pg_index ix ON t.oid = ix.indrelid
+                 JOIN pg_class i ON i.oid = ix.indexrelid
+                 JOIN pg_attribute a ON a.attrelid = t.oid
+            WHERE
+                 a.attnum = ANY(ix.indkey) AND
+                 t.relkind = 'r' AND
+                 t.relname = '{table_name}' AND
+                 a.attname = '{column_name}'
+        """.format(table_name=table, column_name=column)
+    elif 'oracle' in db_url:
+        # Oracle query: Look in Oracle's user views
+        # user_indexes = view of all indexes owned by current user
+        # user_ind_columns = view of all columns that are part of indexes
+        # This joins them to find indexes that contain our specific column
+        query = """
+            SELECT 1
+            FROM user_ind_columns uic
+                 JOIN user_indexes ui ON uic.index_name = ui.index_name
+            WHERE
+                 ui.table_name = UPPER('{table_name}') AND
+                 uic.column_name = UPPER('{column_name}')
+        """.format(table_name=table, column_name=column)
+    else:
+        # Unsupported database
+        raise ValueError(f"Index checking not supported for database type: {db_url}. Only PostgreSQL and Oracle are supported.")
+
+    with engine.begin() as conn:
+        result = conn.execute(text(query))
+        num_results = len(list(result))
     assert num_results >= 1
 
 
 def create_dense_state_table(db_engine, table_name, data):
-    db_engine.execute(
-        """create table {} (
-        entity_id int,
-        state text,
-        start_time timestamp,
-        end_time timestamp
-    )""".format(
-            table_name
-        )
-    )
+    with db_engine.begin() as conn:
+        conn.execute(text(
+            """create table {} (
+            entity_id int,
+            state text,
+            start_time timestamp,
+            end_time timestamp
+        )""".format(table_name)
+        ))
 
-    for row in data:
-        db_engine.execute(
-            "insert into {} values (%s, %s, %s, %s)".format(table_name), row
-        )
+        for row in data:
+            conn.execute(text(
+                "insert into {} values (:p1, :p2, :p3, :p4)".format(table_name)
+            ), {"p1": row[0], "p2": row[1], "p3": row[2], "p4": row[3]})
 
 
 def create_binary_outcome_events(db_engine, table_name, events_data):
-    db_engine.execute(
-        "create table events (entity_id int, outcome_date date, outcome bool)"
-    )
-    for event in events_data:
-        db_engine.execute(
-            "insert into {} values (%s, %s, %s::bool)".format(table_name), event
-        )
+    with db_engine.begin() as conn:
+        conn.execute(text(
+            "create table events (entity_id int, outcome_date date, outcome bool)"
+        ))
+
+        # Determine database type for boolean casting
+        db_url = str(db_engine.url).lower()
+
+        for event in events_data:
+            if 'postgresql' in db_url or 'postgres' in db_url:
+                # PostgreSQL supports ::bool casting
+                conn.execute(text(
+                    "insert into {} values (:p1, :p2, :p3::bool)".format(table_name)
+                ), {"p1": event[0], "p2": event[1], "p3": event[2]})
+            elif 'oracle' in db_url:
+                # Oracle uses different boolean handling (typically NUMBER(1) or VARCHAR2)
+                # Convert Python boolean to 1/0 for Oracle
+                bool_value = 1 if event[2] else 0
+                conn.execute(text(
+                    "insert into {} values (:p1, :p2, :p3)".format(table_name)
+                ), {"p1": event[0], "p2": event[1], "p3": bool_value})
+            else:
+                # Generic approach - let SQLAlchemy handle the conversion
+                conn.execute(text(
+                    "insert into {} values (:p1, :p2, :p3)".format(table_name)
+                ), {"p1": event[0], "p2": event[1], "p3": event[2]})
 
 
 def retry_if_db_error(exception):

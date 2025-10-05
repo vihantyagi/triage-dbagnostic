@@ -33,6 +33,7 @@ from triage.component.architect.entity_date_table_generators import (
 )
 from triage.component.timechop import Timechop
 from triage.component import results_schema
+from triage.component import database
 from triage.component.catwalk import (
     ModelTrainer,
     ModelEvaluator,
@@ -132,6 +133,7 @@ class ExperimentBase(ABC):
         save_predictions=True,
         skip_validation=False,
         partial_run=False,
+        db_adapter=None,
     ):
         # For a partial run, skip validation and avoid cleaning up
         # we'll also skip filling default config values below
@@ -196,6 +198,38 @@ class ExperimentBase(ABC):
             )
 
         self.db_engine = db_engine
+
+        # Initialize database adapter based on engine type or explicit parameter
+        if db_adapter is None:
+            # Auto-detect database type from engine URL
+            db_url = str(self.db_engine.url)
+            if 'postgresql' in db_url or 'postgres' in db_url:
+                self.db_adapter = database.PostgreSQLAdapter(self.db_engine)
+                logger.info("Auto-detected PostgreSQL database, using PostgreSQLAdapter")
+            elif 'oracle' in db_url:
+                self.db_adapter = database.OracleAdapter(self.db_engine)
+                logger.info("Auto-detected Oracle database, using OracleAdapter")
+            else:
+                # Default to PostgreSQL for backward compatibility
+                self.db_adapter = database.PostgreSQLAdapter(self.db_engine)
+                logger.warning(f"Unknown database type in URL '{db_url}', defaulting to PostgreSQLAdapter")
+        else:
+            self.db_adapter = db_adapter
+            logger.info(f"Using explicitly provided database adapter: {type(db_adapter).__name__}")
+
+        # Set up the schema factory with our adapter
+        database.set_schema_factory(self.db_adapter)
+
+        # Create database-specific schemas first, then upgrade
+        try:
+            from sqlalchemy import text
+            for schema_sql in self.db_adapter.create_schemas():
+                with self.db_engine.begin() as conn:
+                    conn.execute(text(schema_sql))
+            logger.debug("Database schemas created successfully")
+        except Exception as e:
+            logger.debug(f"Schema creation returned: {e} (may already exist)")
+
         results_schema.upgrade_if_clean(dburl=self.db_engine.url)
 
         self.features_schema_name = "features"
@@ -309,6 +343,7 @@ class ExperimentBase(ABC):
                 query=label_config["query"],
                 replace=self.replace,
                 db_engine=self.db_engine,
+                db_adapter=self.db_adapter,
             )
         else:
             self.labels_table_name = "labels_{}".format(self.experiment_hash)
@@ -345,6 +380,7 @@ class ExperimentBase(ABC):
             self.cohort_table_generator = EntityDateTableGenerator(
                 entity_date_table_name=self.cohort_table_name,
                 db_engine=self.db_engine,
+                db_adapter=self.db_adapter,
                 query=cohort_config.get("query", None),
                 labels_table_name=self.labels_table_name,
                 replace=self.replace,
@@ -358,6 +394,7 @@ class ExperimentBase(ABC):
             self.protected_groups_table_name = f"protected_groups_{self.bias_hash}"
             self.protected_groups_generator = ProtectedGroupsGenerator(
                 db_engine=self.db_engine,
+                db_adapter=self.db_adapter,
                 from_obj=parse_from_obj(bias_config, "bias_from_obj"),
                 attribute_columns=bias_config.get("attribute_columns", None),
                 entity_id_column=bias_config.get("entity_id_column", None),
@@ -374,13 +411,16 @@ class ExperimentBase(ABC):
             )
 
         self.feature_dictionary_creator = FeatureDictionaryCreator(
-            features_schema_name=self.features_schema_name, db_engine=self.db_engine
+            features_schema_name=self.features_schema_name,
+            db_engine=self.db_engine,
+            db_adapter=self.db_adapter
         )
 
         self.feature_generator = FeatureGenerator(
             features_schema_name=self.features_schema_name,
             replace=self.replace,
             db_engine=self.db_engine,
+            db_adapter=self.db_adapter,
             feature_start_time=split_config["feature_start_time"],
             materialize_subquery_fromobjs=self.materialize_subquery_fromobjs,
             features_ignore_cohort=self.features_ignore_cohort,
@@ -417,6 +457,7 @@ class ExperimentBase(ABC):
                 "include_missing_labels_in_train_as", None
             ),
             engine=self.db_engine,
+            db_adapter=self.db_adapter,
             replace=self.replace,
             run_id=self.run_id,
         )
@@ -425,6 +466,7 @@ class ExperimentBase(ABC):
         if self.subsets:
             self.subsetter = Subsetter(
                 db_engine=self.db_engine,
+                db_adapter=self.db_adapter,
                 replace=self.replace,
                 as_of_times=self.all_as_of_times,
                 cohort_table_name=self.cohort_table_name
@@ -438,7 +480,10 @@ class ExperimentBase(ABC):
         self.trainer = ModelTrainer(
             experiment_hash=self.experiment_hash,
             model_storage_engine=self.model_storage_engine,
-            model_grouper=ModelGrouper(self.config.get("model_group_keys", [])),
+            model_grouper=ModelGrouper(
+                self.config.get("model_group_keys", []),
+                db_adapter=self.db_adapter
+            ),
             db_engine=self.db_engine,
             replace=self.replace,
             run_id=self.run_id,
@@ -446,6 +491,7 @@ class ExperimentBase(ABC):
 
         self.predictor = Predictor(
             db_engine=self.db_engine,
+            db_adapter=self.db_adapter,
             model_storage_engine=self.model_storage_engine,
             save_predictions=self.save_predictions,
             replace=self.replace,
@@ -457,6 +503,7 @@ class ExperimentBase(ABC):
         if "individual_importance" in self.config:
             self.individual_importance_calculator = IndividualImportanceCalculator(
                 db_engine=self.db_engine,
+                db_adapter=self.db_adapter,
                 n_ranks=self.config.get("individual_importance", {}).get("n_ranks", 5),
                 methods=self.config.get("individual_importance", {}).get(
                     "methods", ["uniform"]
@@ -472,6 +519,7 @@ class ExperimentBase(ABC):
 
         self.evaluator = ModelEvaluator(
             db_engine=self.db_engine,
+            db_adapter=self.db_adapter,
             testing_metric_groups=self.config.get("scoring", {}).get(
                 "testing_metric_groups", []
             ),
@@ -899,7 +947,11 @@ class ExperimentBase(ABC):
         logger.success("Training, testing and evaluating models completed")
 
     def validate(self, strict=True):
-        ExperimentValidator(self.db_engine, strict=strict).run(self.config)
+        ExperimentValidator(
+            self.db_engine,
+            strict=strict,
+            db_adapter=self.db_adapter
+        ).run(self.config)
 
     def _run(self):
         if not self.skip_validation:

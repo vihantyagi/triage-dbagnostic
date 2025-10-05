@@ -9,6 +9,7 @@ import numpy as np
 import polars as pl
 import time
 
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from triage.component.results_schema import Matrix
@@ -36,10 +37,12 @@ class BuilderBase:
         replace=True,
         include_missing_labels_in_train_as=None,
         run_id=None,
+        db_adapter=None,
     ):
         self.db_config = db_config
         self.matrix_storage_engine = matrix_storage_engine
         self.db_engine = engine
+        self.db_adapter = db_adapter
         self.experiment_hash = experiment_hash
         self.replace = replace
         self.include_missing_labels_in_train_as = include_missing_labels_in_train_as
@@ -235,19 +238,23 @@ class BuilderBase:
             f"Creating matrix-specific entity-date table for matrix {matrix_uuid} ",
         )
         logger.debug(f"with query {query}")
-        self.db_engine.execute(query)
+        with self.db_engine.begin() as conn:
+            conn.execute(text(query))
 
         return table_name
 
     def _all_labeled_entity_dates_query(
         self, as_of_time_strings, state, label_name, label_type, label_timespan
     ):
+        # Use database adapter for database-specific timestamp array handling
+        timestamp_clause = self.db_adapter.format_timestamp_array_query(as_of_time_strings)
+
         query = f"""
             SELECT entity_id, as_of_date
             FROM {self.db_config["cohort_table_name"]}
             JOIN {self.db_config["labels_schema_name"]}.{self.db_config["labels_table_name"]} using (entity_id, as_of_date)
             WHERE {state}
-            AND as_of_date IN (SELECT (UNNEST (ARRAY{as_of_time_strings}::timestamp[])))
+            AND as_of_date IN {timestamp_clause}
             AND label_name = '{label_name}'
             AND label_type = '{label_type}'
             AND label_timespan = '{label_timespan}'
@@ -257,11 +264,14 @@ class BuilderBase:
         return query
 
     def _all_valid_entity_dates_query(self, state, as_of_time_strings):
+        # Use database adapter for database-specific timestamp array handling
+        timestamp_clause = self.db_adapter.format_timestamp_array_query(as_of_time_strings)
+
         query = f"""
             SELECT entity_id, as_of_date
             FROM {self.db_config["cohort_table_name"]}
             WHERE {state}
-            AND as_of_date IN (SELECT (UNNEST (ARRAY{as_of_time_strings}::timestamp[])))
+            AND as_of_date IN {timestamp_clause}
             ORDER BY entity_id, as_of_date
         """
         if not table_has_data(

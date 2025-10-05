@@ -1,5 +1,5 @@
-"""Functions to retrieve basic information about tables in a Postgres database"""
-from sqlalchemy import MetaData, Table
+"""Functions to retrieve basic information about tables in a database"""
+from sqlalchemy import MetaData, Table, text
 
 
 def split_table(table_name):
@@ -32,7 +32,7 @@ def table_object(table_name, db_engine):
     Returns: (sqlalchemy.Table)
     """
     schema, table = split_table(table_name)
-    meta = MetaData(schema=schema, bind=db_engine)
+    meta = MetaData(schema=schema)
     return Table(table, meta)
 
 
@@ -49,8 +49,8 @@ def reflected_table(table_name, db_engine):
     Returns: (sqlalchemy.Table) A loaded table object
     """
     schema, table = split_table(table_name)
-    meta = MetaData(schema=schema, bind=db_engine)
-    return Table(table, meta, autoload=True, autoload_from=db_engine)
+    meta = MetaData(schema=schema)
+    return Table(table, meta, autoload_with=db_engine)
 
 
 def table_exists(table_name, db_engine):
@@ -76,9 +76,10 @@ def table_has_data(table_name, db_engine):
     """
     if not table_exists(table_name, db_engine):
         return False
-    results = [
-        row for row in db_engine.execute("select * from {} limit 1".format(table_name))
-    ]
+
+    with db_engine.begin() as conn:
+        result = conn.execute(text("select * from {} limit 1".format(table_name)))
+        results = list(result)
 
     return len(results) > 0
 
@@ -94,9 +95,9 @@ def table_row_count(table_name, db_engine):
 
     Returns: (int) The number of rows in the table
     """
-    return next(
-        row for row in db_engine.execute("select count(*) from {}".format(table_name))
-    )
+    with db_engine.begin() as conn:
+        result = conn.execute(text("select count(*) from {}".format(table_name)))
+        return result.scalar()
 
 
 def table_has_duplicates(table_name, column_list, db_engine):
@@ -124,8 +125,10 @@ def table_has_duplicates(table_name, column_list, db_engine):
     )
     SELECT MAX(num_records) FROM counts
     """
-    result = next(db_engine.execute(sql))[0]
-    return result > 1
+    with db_engine.begin() as conn:
+        result = conn.execute(text(sql))
+        max_count = result.scalar()
+    return max_count > 1
 
 
 def table_has_column(table_name, column, db_engine):
@@ -161,6 +164,6 @@ def column_type(table_name, column, db_engine):
 
 
 def schema_tables(schema_name, db_engine):
-    meta = MetaData(schema=schema_name, bind=db_engine)
-    meta.reflect()
+    meta = MetaData(schema=schema_name)
+    meta.reflect(bind=db_engine)
     return meta.tables
