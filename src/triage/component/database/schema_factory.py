@@ -45,55 +45,16 @@ class SchemaFactory:
 _schema_factory = None
 
 
-def set_schema_factory(adapter: 'DatabaseAdapter' = None, db_url: str = None) -> None:
+def set_schema_factory(adapter: 'DatabaseAdapter') -> None:
     """Set the global schema factory with the given adapter.
 
     Args:
-        adapter: Database adapter to use for schema creation. If None, will auto-detect from db_url
-        db_url: Database URL to auto-detect adapter from. Only used if adapter is None
+        adapter: Database adapter to use for schema creation
     """
     global _schema_factory
-
-    if adapter is None:
-        adapter = _auto_detect_adapter(db_url)
-
     _schema_factory = SchemaFactory(adapter)
 
 
-def _auto_detect_adapter(db_url: str = None) -> 'DatabaseAdapter':
-    """Auto-detect the appropriate database adapter.
-
-    Args:
-        db_url: Database URL to detect from. If None, tries to detect from environment
-
-    Returns:
-        Appropriate DatabaseAdapter instance
-    """
-    # Import adapters here to avoid circular imports
-    from . import get_postgresql_adapter, get_oracle_adapter
-
-    # If URL provided, detect from URL
-    if db_url:
-        if 'postgresql' in db_url or 'postgres' in db_url:
-            return get_postgresql_adapter()(db_engine=None)
-        elif 'oracle' in db_url:
-            return get_oracle_adapter()(db_engine=None)
-
-    # Fallback: detect from available drivers
-    try:
-        import psycopg2
-        return get_postgresql_adapter()(db_engine=None)
-    except ImportError:
-        pass
-
-    try:
-        import oracledb
-        return get_oracle_adapter()(db_engine=None)
-    except ImportError:
-        pass
-
-    # Final fallback: use PostgreSQL as default
-    return get_postgresql_adapter()(db_engine=None)
 
 
 def get_schema_factory() -> SchemaFactory:
@@ -102,15 +63,13 @@ def get_schema_factory() -> SchemaFactory:
     Returns:
         The current schema factory instance
 
-    Note:
-        If no schema factory has been configured, automatically sets up a default one
+    Raises:
+        RuntimeError: If no schema factory has been configured
     """
-    global _schema_factory
-
     if _schema_factory is None:
-        # Auto-configure a default factory
-        set_schema_factory()
-
+        raise RuntimeError(
+            "No schema factory configured. Call set_schema_factory() first."
+        )
     return _schema_factory
 
 
