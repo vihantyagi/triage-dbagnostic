@@ -10,10 +10,6 @@ def get_oracle_adapter():
     from .oracle import OracleAdapter
     return OracleAdapter
 
-# For backwards compatibility, make adapters available at module level
-PostgreSQLAdapter = None
-OracleAdapter = None
-
 def __getattr__(name):
     if name == 'PostgreSQLAdapter':
         return get_postgresql_adapter()
