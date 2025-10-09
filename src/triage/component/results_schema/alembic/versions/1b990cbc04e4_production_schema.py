@@ -7,6 +7,7 @@ Create Date: 2019-02-20 16:41:22.810452
 """
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import text
 
 
 # revision identifiers, used by Alembic.
@@ -17,10 +18,10 @@ depends_on = None
 
 
 def upgrade():
-    op.execute("CREATE SCHEMA IF NOT EXISTS production")
-    op.execute("ALTER TABLE triage_metadata.list_predictions SET SCHEMA production;")
+    op.execute(text("CREATE SCHEMA IF NOT EXISTS production"))
+    op.execute(text("ALTER TABLE triage_metadata.list_predictions SET SCHEMA production;"))
 
 
 def downgrade():
-    op.execute("ALTER TABLE production.list_predictions SET SCHEMA triage_metadata;")
-    op.execute("DROP SCHEMA IF EXISTS production")
+    op.execute(text("ALTER TABLE production.list_predictions SET SCHEMA triage_metadata;"))
+    op.execute(text("DROP SCHEMA IF EXISTS production"))

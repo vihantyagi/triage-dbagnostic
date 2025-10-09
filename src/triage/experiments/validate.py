@@ -1,6 +1,7 @@
 import importlib
 
 import verboselogs, logging
+from sqlalchemy import text
 
 logger = verboselogs.VerboseLogger(__name__)
 
@@ -234,7 +235,7 @@ class FeatureAggregationsValidator(Validator):
                 logger.spam("Validating choice query")
                 choice_query = categorical["choice_query"]
                 try:
-                    conn.execute("explain {}".format(choice_query))
+                    conn.execute(text("explain {}".format(choice_query)))
                     logger.debug("Validation of choice query was successful")
                 except Exception as e:
                     raise ValueError(
@@ -255,7 +256,7 @@ class FeatureAggregationsValidator(Validator):
         conn = self.db_engine.connect()
         logger.spam("Validating from_obj")
         try:
-            conn.execute("explain select * from {}".format(from_obj))
+            conn.execute(text("explain select * from {}".format(from_obj)))
             logger.debug("Validation of from_obj was successful")
         except Exception as e:
             raise ValueError(
@@ -441,7 +442,7 @@ class LabelConfigValidator(Validator):
         conn = self.db_engine.connect()
         logger.spam("Validating label query via SQL EXPLAIN")
         try:
-            conn.execute("explain {}".format(bound_query))
+            conn.execute(text("explain {}".format(bound_query)))
             logger.debug("Validation of label query was successful")
         except Exception as e:
             raise ValueError(

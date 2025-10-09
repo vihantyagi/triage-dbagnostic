@@ -4,6 +4,7 @@ logger = verboselogs.VerboseLogger(__name__)
 import os
 import numpy as np
 import pandas as pd
+from sqlalchemy import text
 
 from .utils import str_in_sql
 from .metric_directionality import sql_rank_order, value_agg_funcs
@@ -30,7 +31,7 @@ class DistanceFromBestTable:
 
     def _delete(self):
         """Delete the distance-from-best table if it exists"""
-        self.db_engine.execute("drop table if exists {}".format(self.distance_table))
+        self.db_engine.execute(text("drop table if exists {}".format(self.distance_table)))
 
     def _create(self):
         """Create the distance-from-best table"""
