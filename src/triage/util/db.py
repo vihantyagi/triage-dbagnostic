@@ -43,6 +43,10 @@ class SerializableDbEngine(wrapt.ObjectProxy):
         self.creator = creator
         self.kwargs = kwargs
 
+        # Add json_serializer for PostgreSQL only
+        if self.url.drivername in ('postgresql', 'postgresql+psycopg2', 'postgresql+psycopg2cffi'):
+            kwargs['json_serializer'] = json_dumps
+
         engine = creator(url, **kwargs)
         super().__init__(engine)
 
@@ -58,7 +62,7 @@ class SerializableDbEngine(wrapt.ObjectProxy):
         return cls(url, creator=creator, **kwargs)
 
 
-create_engine = functools.partial(SerializableDbEngine, json_serializer=json_dumps)
+create_engine = SerializableDbEngine
 
 @contextmanager
 def scoped_session(db_engine):
