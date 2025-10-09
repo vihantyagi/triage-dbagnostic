@@ -1,5 +1,5 @@
 """Functions to retrieve basic information about tables in a database"""
-from sqlalchemy import MetaData, Table, text
+from sqlalchemy import MetaData, Table, text, inspect
 
 
 def split_table(table_name):
@@ -62,7 +62,10 @@ def table_exists(table_name, db_engine):
 
     Returns: (boolean) Whether or not the table exists in the database
     """
-    return table_object(table_name, db_engine).exists()
+    table_obj = table_object(table_name, db_engine)
+    engine = getattr(db_engine, 'engine', db_engine)
+    inspector = inspect(engine)
+    return inspector.has_table(table_obj.name, schema=table_obj.schema)
 
 
 def table_has_data(table_name, db_engine):
