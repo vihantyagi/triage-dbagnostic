@@ -5,7 +5,7 @@ from sqlalchemy.dialects.postgresql import JSONB, ARRAY
 from sqlalchemy.orm import Session
 
 from .base import DatabaseAdapter
-from ..results_schema.schema import Base
+# Moved import inside methods to avoid circular import
 
 
 class PostgreSQLAdapter(DatabaseAdapter):
