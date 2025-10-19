@@ -97,7 +97,8 @@ class FeatureGenerator:
 
                 try:
                     with self.db_engine.begin() as conn:
-                        conn.execute(text("explain {}".format(categorical["choice_query"])))
+                        explain_prefix = self.db_adapter.get_explain_query_prefix() if self.db_adapter else "explain"
+                        conn.execute(text("{} {}".format(explain_prefix, categorical["choice_query"])))
                 except Exception as exc:
                     raise ValueError(
                         f"choice query does not run. \n"
@@ -108,7 +109,8 @@ class FeatureGenerator:
         logger.spam("Validating from_obj")
         try:
             with self.db_engine.begin() as conn:
-                conn.execute(text("explain select * from {}".format(from_obj)))
+                explain_prefix = self.db_adapter.get_explain_query_prefix() if self.db_adapter else "explain"
+                conn.execute(text("{} select * from {}".format(explain_prefix, from_obj)))
         except Exception as exc:
             raise ValueError(
                 "from_obj query does not run. \n"
@@ -262,7 +264,7 @@ class FeatureGenerator:
                 col=categorical["column"],
                 op="@>",
                 choices={
-                    choice: "array['{}'::varchar]".format(choice)
+                    choice: self._build_array_choice_value(choice)
                     for choice in self._build_choices(categorical)
                 },
                 function=categorical["metrics"],
@@ -278,6 +280,40 @@ class FeatureGenerator:
             )
             for categorical in categorical_config
         ]
+
+    def _build_array_choice_value(self, choice):
+        """Build database-specific array choice value for categorical comparisons."""
+        if self.db_adapter:
+            return self.db_adapter.build_array_categorical_choice(choice)
+        else:
+            # Fallback to PostgreSQL array syntax
+            return "array['{}'::varchar]".format(choice)
+
+    def _build_needs_features_query(self, state_table, imputed_table):
+        """Build database-specific query to check if features need to be rebuilt."""
+        if self.db_adapter:
+            # Use USING clause which works in both PostgreSQL and Oracle
+            base_query = (
+                f"SELECT 1 FROM {state_table} "
+                f"LEFT JOIN {self.features_schema_name}.{imputed_table} "
+                f"USING (entity_id, as_of_date) "
+                f"WHERE {self.features_schema_name}.{imputed_table}.entity_id IS NULL"
+            )
+            limit_clause = self.db_adapter.get_limit_clause(1)
+
+            # For Oracle ROWNUM, we need to wrap the query
+            if "ROWNUM" in limit_clause:
+                return f"SELECT * FROM ({base_query}) {limit_clause}"
+            else:
+                return f"{base_query} {limit_clause}"
+        else:
+            # Fallback to original PostgreSQL syntax
+            return (
+                f"select 1 from {state_table} "
+                f"left join {self.features_schema_name}.{imputed_table} "
+                f"using (entity_id, as_of_date) "
+                f"where {self.features_schema_name}.{imputed_table}.entity_id is null limit 1"
+            )
 
     def _aggregation(self, aggregation_config, feature_dates, state_table):
         logger.debug(
@@ -490,7 +526,8 @@ class FeatureGenerator:
             for aggregation in aggregations:
                 for selectlist in aggregation.get_selects().values():
                     for select in selectlist:
-                        query = "explain " + str(select)
+                        explain_prefix = self.db_adapter.get_explain_query_prefix() if self.db_adapter else "explain"
+                        query = "{} {}".format(explain_prefix, str(select))
                         results = list(conn.execute(text(query)))
                         logger.spam(str(select))
                         logger.spam(results)
@@ -500,17 +537,29 @@ class FeatureGenerator:
         return table_name.split(".")[1].replace('"', "")
 
     def _table_exists(self, table_name):
-        try:
-            with self.db_engine.begin() as conn:
-                conn.execute(text(
-                    "select 1 from {}.{} limit 1".format(
+        if self.db_adapter:
+            try:
+                with self.db_engine.begin() as conn:
+                    query = self.db_adapter.get_table_exists_check_query(
                         self.features_schema_name, table_name
                     )
-                )).first()
-        except sqlalchemy.exc.ProgrammingError:
-            return False
+                    result = conn.execute(text(query)).first()
+                    return result is not None
+            except sqlalchemy.exc.ProgrammingError:
+                return False
         else:
-            return True
+            # Fallback to original PostgreSQL method
+            try:
+                with self.db_engine.begin() as conn:
+                    conn.execute(text(
+                        "select 1 from {}.{} limit 1".format(
+                            self.features_schema_name, table_name
+                        )
+                    )).first()
+            except sqlalchemy.exc.ProgrammingError:
+                return False
+            else:
+                return True
 
     def run_commands(self, command_list):
         with self.db_engine.begin() as conn:
@@ -522,7 +571,14 @@ class FeatureGenerator:
                     conn.execute(command)
 
     def _aggregation_index_query(self, aggregation, imputed=False):
-        return f"CREATE INDEX ON {aggregation.get_table_name(imputed=imputed)} ({self.entity_id_column}, {aggregation.output_date_column})"
+        table_name = aggregation.get_table_name(imputed=imputed)
+        columns = [self.entity_id_column, aggregation.output_date_column]
+
+        if self.db_adapter:
+            return self.db_adapter.create_index_statement(table_name, columns)
+        else:
+            # Fallback to PostgreSQL syntax
+            return f"CREATE INDEX ON {table_name} ({', '.join(columns)})"
 
     def _aggregation_index_columns(self, aggregation):
         return sorted(
@@ -545,12 +601,7 @@ class FeatureGenerator:
         )
 
         if self._table_exists(imputed_table):
-            check_query = (
-                f"select 1 from {aggregation.state_table} "
-                f"left join {self.features_schema_name}.{imputed_table} "
-                f"using (entity_id, as_of_date) "
-                f"where {self.features_schema_name}.{imputed_table}.entity_id is null limit 1"
-            )
+            check_query = self._build_needs_features_query(aggregation.state_table, imputed_table)
             with self.db_engine.begin() as conn:
                 result = conn.execute(text(check_query))
                 if result.scalar():

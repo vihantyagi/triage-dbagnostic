@@ -50,15 +50,21 @@ class FeatureDictionaryCreator:
         :return: names of the feature columns in given table
         :rtype: list
         """
-        # format the query that gets column names,
-        # excluding indices from result
-        feature_names_query = f"""
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_name = '{table_name}' AND
-                  table_schema = '{self.features_schema_name}' AND
-                  column_name NOT IN ({str_in_sql(index_columns)})
-        """
+        # Use database adapter for database-specific column query
+        if self.db_adapter:
+            feature_names_query = self.db_adapter.get_table_columns_query(
+                table_name, self.features_schema_name, index_columns
+            )
+        else:
+            # Fallback to PostgreSQL-specific query for backward compatibility
+            feature_names_query = f"""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = '{table_name}' AND
+                      table_schema = '{self.features_schema_name}' AND
+                      column_name NOT IN ({str_in_sql(index_columns)})
+            """
+
         logger.spam(
             f"Extracting all possible feature names for table {table_name} with query {feature_names_query}"
         )

@@ -26,7 +26,8 @@ class Predictor:
         db_engine,
         rank_order,
         replace=True,
-        save_predictions=True
+        save_predictions=True,
+        db_adapter=None
     ):
         """Encapsulates the task of generating predictions on an arbitrary
         dataset and storing the results

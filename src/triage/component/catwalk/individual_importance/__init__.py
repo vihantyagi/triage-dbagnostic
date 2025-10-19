@@ -5,7 +5,7 @@ from triage.component.catwalk.utils import save_db_objects
 from triage.component.results_schema import IndividualImportance
 
 from .uniform import uniform_distribution
-
+from sqlalchemy import text
 
 CALCULATE_STRATEGIES = {"uniform": uniform_distribution}
 
@@ -34,6 +34,7 @@ class IndividualImportanceCalculator:
 
     Args:
         db_engine (sqlalchemy.engine)
+        db_adapter (DatabaseAdapter) Database adapter for database-specific operations
         n_ranks (int) Number of ranks to calculate and save. Defaults to 5
         methods (list) Strings corresponding to individual importance methods  ,
             present in CALCULATE_STRATEGIES that should be called.
@@ -41,25 +42,17 @@ class IndividualImportanceCalculator:
         replace (bool) Whether to replace old records or reuse them.
     """
 
-    def __init__(self, db_engine, n_ranks=5, methods=["uniform"], replace=True):
+    def __init__(self, db_engine, db_adapter, n_ranks=5, methods=["uniform"], replace=True):
         self.db_engine = db_engine
+        self.db_adapter = db_adapter
         self.n_ranks = n_ranks
         self.methods = methods
         self.replace = replace
 
     def _num_existing_importances(self, model_id, as_of_date, method):
-        return [
-            row[0]
-            for row in self.db_engine.execute(
-                """select count(*) from test_results.individual_importances
-            where model_id = %s
-            and as_of_date = %s
-            and method = %s""",
-                model_id,
-                as_of_date,
-                method,
-            )
-        ][0]
+        query = self.db_adapter.get_existing_importances_count_query(model_id, as_of_date, method)
+        result = self.db_engine.execute(text(query))
+        return result.fetchone()[0]
 
     def _needs_new_importances(self, model_id, as_of_date, method, matrix_store):
         """Determines whether or not importances matching the arguments are present in the database
@@ -150,15 +143,8 @@ class IndividualImportanceCalculator:
             method_name (string) The name of the method that produced the importance records
 
         """
-        self.db_engine.execute(
-            """delete from test_results.individual_importances
-            where model_id = %s
-            and as_of_date = %s
-            and method = %s""",
-            model_id,
-            as_of_date,
-            method_name,
-        )
+        delete_query = self.db_adapter.delete_individual_importances_query(model_id, as_of_date, method_name)
+        self.db_engine.execute(text(delete_query))
         record_stream = (
             IndividualImportance(
                 model_id=int(model_id),

@@ -229,11 +229,20 @@ class BuilderBase:
             raise ValueError(f"Unknown matrix type passed: {matrix_type}")
 
         table_name = "_".join([matrix_uuid, "matrix_entity_date"])
-        query = f"""
-            DROP TABLE IF EXISTS {self.db_config["features_schema_name"]}."{table_name}";
-            CREATE TABLE {self.db_config["features_schema_name"]}."{table_name}"
-            AS ({indices_query})
-        """
+        full_table_name = f'{self.db_config["features_schema_name"]}."{table_name}"'
+
+        if self.db_adapter:
+            # Use database adapter for table operations
+            drop_query = self.db_adapter.get_drop_table_if_exists_query(full_table_name)
+            create_query = self.db_adapter.get_create_table_as_query(full_table_name, indices_query)
+            query = f"{drop_query}; {create_query}"
+        else:
+            # Fallback to PostgreSQL syntax
+            query = f"""
+                DROP TABLE IF EXISTS {full_table_name};
+                CREATE TABLE {full_table_name}
+                AS ({indices_query})
+            """
         logger.debug(
             f"Creating matrix-specific entity-date table for matrix {matrix_uuid} ",
         )
@@ -544,22 +553,36 @@ class MatrixBuilder(BuilderBase):
 
         filenames = []
         for i, query_string in enumerate(features_queries):
-            copy_sql = f"COPY ({query_string}) TO STDOUT WITH CSV {header}"
             bio = io.BytesIO()
-            cursor.copy_expert(copy_sql, bio)
+
+            if self.db_adapter:
+                # Use database adapter for CSV export
+                self.db_adapter.export_query_to_csv(query_string, cursor, bio, include_header=(header == "HEADER"))
+            else:
+                # Fallback to PostgreSQL COPY
+                copy_sql = f"COPY ({query_string}) TO STDOUT WITH CSV {header}"
+                cursor.copy_expert(copy_sql, bio)
+
             bio.seek(0)
             output_ = bio.read()
-            
+
             filenames.append(path_ + "/" + matrix_uuid + "_" + str(i) + ".csv")
-            
+
             matrix_store.save_tmp_csv(output_, path_, matrix_uuid, f"_{str(i)}.csv")
 
         logger.debug(f"number of feature files to paste for matrix {matrix_uuid}: {len(filenames)}")
 
         # label
-        copy_sql = f"COPY ({label_query}) TO STDOUT WITH CSV {header}"
         bio = io.BytesIO()
-        cursor.copy_expert(copy_sql, bio)
+
+        if self.db_adapter:
+            # Use database adapter for CSV export
+            self.db_adapter.export_query_to_csv(label_query, cursor, bio, include_header=(header == "HEADER"))
+        else:
+            # Fallback to PostgreSQL COPY
+            copy_sql = f"COPY ({label_query}) TO STDOUT WITH CSV {header}"
+            cursor.copy_expert(copy_sql, bio)
+
         bio.seek(0)
         output_ = bio.read()
 

@@ -20,8 +20,9 @@ from triage.validation_primitives import string_is_tablesafe
 
 
 class Validator:
-    def __init__(self, db_engine=None, strict=True, entity_id_column="entity_id"):
+    def __init__(self, db_engine=None, db_adapter=None, strict=True, entity_id_column="entity_id"):
         self.db_engine = db_engine
+        self.db_adapter = db_adapter
         self.strict = strict
         self.entity_id_column = entity_id_column
 
@@ -235,7 +236,8 @@ class FeatureAggregationsValidator(Validator):
                 logger.spam("Validating choice query")
                 choice_query = categorical["choice_query"]
                 try:
-                    conn.execute(text("explain {}".format(choice_query)))
+                    explain_prefix = self.db_adapter.get_explain_query_prefix()
+                    conn.execute(text("{} {}".format(explain_prefix, choice_query)))
                     logger.debug("Validation of choice query was successful")
                 except Exception as e:
                     raise ValueError(
@@ -256,7 +258,8 @@ class FeatureAggregationsValidator(Validator):
         conn = self.db_engine.connect()
         logger.spam("Validating from_obj")
         try:
-            conn.execute(text("explain select * from {}".format(from_obj)))
+            explain_prefix = self.db_adapter.get_explain_query_prefix()
+            conn.execute(text("{} select * from {}".format(explain_prefix, from_obj)))
             logger.debug("Validation of from_obj was successful")
         except Exception as e:
             raise ValueError(
@@ -442,7 +445,8 @@ class LabelConfigValidator(Validator):
         conn = self.db_engine.connect()
         logger.spam("Validating label query via SQL EXPLAIN")
         try:
-            conn.execute(text("explain {}".format(bound_query)))
+            explain_prefix = self.db_adapter.get_explain_query_prefix()
+            conn.execute(text("{} {}".format(explain_prefix, bound_query)))
             logger.debug("Validation of label query was successful")
         except Exception as e:
             raise ValueError(
@@ -543,7 +547,8 @@ class CohortConfigValidator(Validator):
         dated_query = query.replace("{as_of_date}", "2016-01-01")
         logger.spam("Validating cohort query via SQL EXPLAIN")
         try:
-            self.db_engine.execute(f"explain {dated_query}")
+            explain_prefix = self.db_adapter.get_explain_query_prefix()
+            self.db_engine.execute(text(f"{explain_prefix} {dated_query}"))
             logger.debug("Validation of cohort query was successful")
         except Exception as e:
             raise ValueError(
@@ -991,13 +996,13 @@ class ExperimentValidator(Validator):
         TemporalValidator(strict=self.strict).run(
             experiment_config.get("temporal_config", {})
         )
-        FeatureAggregationsValidator(self.db_engine, strict=self.strict).run(
+        FeatureAggregationsValidator(self.db_engine, self.db_adapter, strict=self.strict).run(
             experiment_config.get("feature_aggregations", {})
         )
-        LabelConfigValidator(self.db_engine, strict=self.strict).run(
+        LabelConfigValidator(self.db_engine, self.db_adapter, strict=self.strict).run(
             experiment_config.get("label_config", None)
         )
-        CohortConfigValidator(self.db_engine, strict=self.strict).run(
+        CohortConfigValidator(self.db_engine, self.db_adapter, strict=self.strict).run(
             experiment_config.get("cohort_config", {})
         )
         FeatureGroupDefinitionValidator(strict=self.strict).run(
@@ -1017,7 +1022,7 @@ class ExperimentValidator(Validator):
         GridConfigValidator(strict=self.strict).run(
             experiment_config.get("grid_config", {})
         )
-        PredictionConfigValidator(self.db_engine, strict=self.strict).run(
+        PredictionConfigValidator(self.db_engine, self.db_adapter, strict=self.strict).run(
             experiment_config.get("prediction", {})
         )
         ScoringConfigValidator(strict=self.strict).run(

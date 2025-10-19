@@ -37,17 +37,22 @@ class LabelGenerator:
         if self.replace or not table_exists(labels_table_name, self.db_engine):
             with self.db_engine.begin() as conn:
                 conn.execute(text(f"drop table if exists {labels_table_name}"))
-                conn.execute(text(
-                    f"""
-                    create table {labels_table_name} (
-                    entity_id int,
-                    as_of_date date,
-                    label_timespan interval,
-                    label_name varchar,
-                    label_type varchar,
-                    label smallint
-                    )"""
-                ))
+
+                # Use database adapter for database-specific DDL
+                if self.db_adapter:
+                    ddl = self.db_adapter.get_labels_table_ddl(labels_table_name)
+                else:
+                    # Fallback to PostgreSQL DDL for backwards compatibility
+                    ddl = f"""
+                        create table {labels_table_name} (
+                        entity_id int,
+                        as_of_date date,
+                        label_timespan interval,
+                        label_name varchar,
+                        label_type varchar,
+                        label smallint
+                        )"""
+                conn.execute(text(ddl))
         else:
             logger.notice(f"Not dropping and recreating {labels_table_name} table because "
                           f"replace flag was set to False and table was found to exist")
@@ -60,14 +65,23 @@ class LabelGenerator:
                 if not self.replace:
                     logger.spam(f"Looking for existing labels for as of date {as_of_date} and label timespan {label_timespan}")
                     with self.db_engine.begin() as conn:
-                        result = conn.execute(text(
-                            f"""select 1 from {labels_table}
-                            where as_of_date = '{as_of_date}'
-                            and label_timespan = '{label_timespan}'::interval
-                            and label_name = '{self.label_name}'
-                            limit 1
-                            """)
-                        )
+                        # Use database adapter for complete query
+                        if self.db_adapter:
+                            query = self.db_adapter.get_existing_labels_check_query(
+                                labels_table=labels_table,
+                                as_of_date=as_of_date,
+                                label_timespan=label_timespan,
+                                label_name=self.label_name
+                            )
+                        else:
+                            # Fallback to PostgreSQL syntax
+                            query = f"""select 1 from {labels_table}
+                                       where as_of_date = '{as_of_date}'
+                                       and label_timespan = '{label_timespan}'::interval
+                                       and label_name = '{self.label_name}'
+                                       limit 1"""
+
+                        result = conn.execute(text(query))
                         any_existing_labels = list(result)
                     if len(any_existing_labels) == 1:
                         logger.spam("Since nonzero existing labels found, skipping")
@@ -83,7 +97,13 @@ class LabelGenerator:
                 )
 
         with self.db_engine.begin() as conn:
-            conn.execute(text(f"create index on {labels_table} (entity_id, as_of_date)"))
+            # Use database adapter for index creation
+            if self.db_adapter:
+                index_sql = self.db_adapter.create_index_statement(labels_table, ['entity_id', 'as_of_date'])
+            else:
+                # Fallback to PostgreSQL syntax
+                index_sql = f"create index on {labels_table} (entity_id, as_of_date)"
+            conn.execute(text(index_sql))
         logger.spam("Added index to labels table")
 
         nrows = table_row_count(labels_table, self.db_engine)
@@ -121,19 +141,30 @@ class LabelGenerator:
             as_of_date=start_date, label_timespan=label_timespan
         )
 
-        full_insert_query = textwrap.dedent(
-            f"""
-            insert into {labels_table}
-            select
-                entities_and_outcomes.entity_id,
-                '{start_date}' as as_of_date,
-                '{label_timespan}'::interval as label_timespan,
-                '{self.label_name}' as label_name,
-                'binary' as label_type,
-                entities_and_outcomes.outcome as label
-            from ({query_with_db_variables}) entities_and_outcomes
-            """
-        )
+        # Use database adapter for complete insert query
+        if self.db_adapter:
+            full_insert_query = self.db_adapter.get_label_insert_query(
+                labels_table=labels_table,
+                start_date=start_date,
+                label_timespan=label_timespan,
+                label_name=self.label_name,
+                query_with_db_variables=query_with_db_variables
+            )
+        else:
+            # Fallback to PostgreSQL syntax
+            full_insert_query = textwrap.dedent(
+                f"""
+                insert into {labels_table}
+                select
+                    entities_and_outcomes.entity_id,
+                    '{start_date}' as as_of_date,
+                    '{label_timespan}'::interval as label_timespan,
+                    '{self.label_name}' as label_name,
+                    'binary' as label_type,
+                    entities_and_outcomes.outcome as label
+                from ({query_with_db_variables}) entities_and_outcomes
+                """
+            )
 
         logger.spam("Running label insertion query")
         logger.spam(full_insert_query)

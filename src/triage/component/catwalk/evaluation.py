@@ -73,34 +73,28 @@ def subset_labels_and_predictions(
     return (labels_subset, predictions_subset, protected_df_subset)
 
 
-def query_subset_table(db_engine, as_of_dates, subset_table_name):
+def query_subset_table(db_engine, db_adapter, as_of_dates, subset_table_name):
     """Queries the subset table to find the entities active at the given
        as_of_dates
 
     Args:
         db_engine (sqlalchemy.engine) a database engine
-        as_of_dates (list) the as_of_Dates to query
+        db_adapter (DatabaseAdapter) database adapter for database-specific operations
+        as_of_dates (list) the as_of_dates to query
         subset_table_name (str) the name of the table to query
 
     Returns: (pandas.DataFrame) a dataframe indexed by the entity-date pairs
         active in the subset
     """
-    as_of_dates_sql = "[{}]".format(
-        ", ".join(
-            "'{}'".format(date.strftime("%Y-%m-%d %H:%M:%S.%f")) for date in as_of_dates
-        )
-    )
-    query_string = f"""
-        with dates as (
-            select unnest(array{as_of_dates_sql}::timestamp[]) as as_of_date
-        )
-        select entity_id, as_of_date, active
-        from {subset_table_name}
-        join dates using(as_of_date)
-    """
-    df = pd.DataFrame.pg_copy_from(
+    # Format dates as strings for the database adapter
+    formatted_dates = [date.strftime("%Y-%m-%d %H:%M:%S.%f") for date in as_of_dates]
+
+    # Get database-specific query from adapter
+    query_string = db_adapter.get_subset_table_query(formatted_dates, subset_table_name)
+
+    # Use adapter's query_to_dataframe method for database-specific optimization
+    df = db_adapter.query_to_dataframe(
         query_string,
-        connectable=db_engine,
         parse_dates=["as_of_date"],
         index_col=MatrixStore.indices,
     )
@@ -187,6 +181,7 @@ class ModelEvaluator:
         testing_metric_groups,
         training_metric_groups,
         db_engine,
+        db_adapter,
         custom_metrics=None,
         bias_config=None,
     ):
@@ -216,6 +211,7 @@ class ModelEvaluator:
             training_metric_groups (list) metrics to be calculated on training set,
                 in the same form as testing_metric_groups
             db_engine (sqlalchemy.engine)
+            db_adapter (DatabaseAdapter) Database adapter for database-specific operations
             custom_metrics (dict) Functions to generate metrics
                 not available by default
                 Each function is expected take in the following params:
@@ -225,6 +221,7 @@ class ModelEvaluator:
         self.testing_metric_groups = testing_metric_groups
         self.training_metric_groups = training_metric_groups
         self.db_engine = db_engine
+        self.db_adapter = db_adapter
         self.bias_config = bias_config
         if custom_metrics:
             self._validate_metrics(custom_metrics)
@@ -549,6 +546,7 @@ class ModelEvaluator:
             labels, predictions_proba, protected_df = subset_labels_and_predictions(
                 subset_df=query_subset_table(
                     self.db_engine,
+                    self.db_adapter,
                     matrix_store.as_of_dates,
                     get_subset_table_name(subset),
                 ),

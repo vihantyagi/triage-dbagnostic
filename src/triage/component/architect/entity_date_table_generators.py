@@ -74,19 +74,31 @@ class EntityDateTableGenerator:
 
             with self.db_engine.begin() as conn:
                 conn.execute(text(f"drop table if exists {self.entity_date_table_name}"))
-                conn.execute(text(
-                    f"""create table {self.entity_date_table_name} (
-                        entity_id integer,
-                        as_of_date timestamp,
-                        {DEFAULT_ACTIVE_STATE} boolean
-                    )
-                    """
-                ))
+
+                # Use database adapter for table creation
+                if self.db_adapter:
+                    ddl = self.db_adapter.get_entity_date_table_ddl(self.entity_date_table_name)
+                else:
+                    # Fallback to PostgreSQL DDL
+                    ddl = f"""create table {self.entity_date_table_name} (
+                            entity_id integer,
+                            as_of_date timestamp,
+                            {DEFAULT_ACTIVE_STATE} boolean
+                        )"""
+                conn.execute(text(ddl))
 
                 logger.spam(f"Creating indices on entity_id and as_of_date for entity_date table {self.entity_date_table_name}")
-                conn.execute(text(
-                    f"create index on {self.entity_date_table_name} (entity_id, as_of_date)"
-                ))
+
+                # Use database adapter for index creation
+                if self.db_adapter:
+                    index_sql = self.db_adapter.create_index_statement(
+                        self.entity_date_table_name,
+                        ['entity_id', 'as_of_date']
+                    )
+                else:
+                    # Fallback to PostgreSQL syntax
+                    index_sql = f"create index on {self.entity_date_table_name} (entity_id, as_of_date)"
+                conn.execute(text(index_sql))
         else:
             logger.notice(
                 f"Not dropping and recreating entity_date {self.entity_date_table_name} table because "
@@ -100,7 +112,7 @@ class EntityDateTableGenerator:
         Args:
         as_of_dates (list of datetime.date): Dates to calculate entity states as of
         """
-        
+
         self._maybe_create_entity_date_table()
         logger.spam(f"Inserting rows into entity_date table {self.entity_date_table_name}")
         for as_of_date in as_of_dates:
@@ -108,12 +120,18 @@ class EntityDateTableGenerator:
             logger.spam(f"Looking for existing entity_date rows for as of date {as_of_date}")
 
             with self.db_engine.begin() as conn:
-                result = conn.execute(text(
-                    f"""select 1 from {self.entity_date_table_name}
-                    where as_of_date = '{formatted_date}'
-                    limit 1
-                    """
-                ))
+                # Use database adapter for checking existing entity_date records
+                if self.db_adapter:
+                    check_query = self.db_adapter.get_entity_date_check_query(
+                        self.entity_date_table_name, formatted_date
+                    )
+                else:
+                    # Fallback to PostgreSQL syntax
+                    check_query = f"""select 1 from {self.entity_date_table_name}
+                                     where as_of_date = '{formatted_date}'
+                                     limit 1"""
+
+                result = conn.execute(text(check_query))
                 any_existing = list(result)
 
             if len(any_existing) == 1:
@@ -121,11 +139,19 @@ class EntityDateTableGenerator:
                 continue
 
             dated_query = self.query.format(as_of_date=formatted_date)
-            full_query = f"""insert into {self.entity_date_table_name}
-                select q.entity_id, '{formatted_date}'::timestamp, true
-                from ({dated_query}) q
-                group by 1, 2, 3
-            """
+
+            # Use database adapter for entity_date insert query
+            if self.db_adapter:
+                full_query = self.db_adapter.get_entity_date_insert_query(
+                    self.entity_date_table_name, formatted_date, dated_query
+                )
+            else:
+                # Fallback to PostgreSQL syntax
+                full_query = f"""insert into {self.entity_date_table_name}
+                    select q.entity_id, '{formatted_date}'::timestamp, true
+                    from ({dated_query}) q
+                    group by 1, 2, 3"""
+
             logger.spam(f"Running entity_date query for date: {as_of_date}, {full_query}")
 
             with self.db_engine.begin() as conn:
@@ -166,17 +192,25 @@ class EntityDateTableGenerator:
             logger.notice(f'Existing entity_dates records found for the following dates, '
                 f'so new records will not be inserted for these dates {existing_dates}')
 
-        insert_query = f"""
-            insert into {self.entity_date_table_name}
-            select distinct entity_id, as_of_date, true
-            from (
-                select distinct l.entity_id, l.as_of_date
-                from {self.labels_table_name} as l
-                left join (select distinct as_of_date from {self.entity_date_table_name}) as c
-                    on l.as_of_date::DATE = c.as_of_date::DATE
-                where c.as_of_date IS NULL
-            ) as sub
-        """
+        # Use database adapter for labels-to-entity date query
+        if self.db_adapter:
+            insert_query = self.db_adapter.get_labels_to_entity_date_query(
+                self.entity_date_table_name, self.labels_table_name
+            )
+        else:
+            # Fallback to PostgreSQL syntax
+            insert_query = f"""
+                insert into {self.entity_date_table_name}
+                select distinct entity_id, as_of_date, true
+                from (
+                    select distinct l.entity_id, l.as_of_date
+                    from {self.labels_table_name} as l
+                    left join (select distinct as_of_date from {self.entity_date_table_name}) as c
+                        on l.as_of_date::DATE = c.as_of_date::DATE
+                    where c.as_of_date IS NULL
+                ) as sub
+            """
+
         logger.spam(f"Running entity_date query from labels table: {insert_query}")
 
         with self.db_engine.begin() as conn:
@@ -232,21 +266,27 @@ class SubsetEntityDateTableGenerator(EntityDateTableGenerator):
         Args:
             as_of_dates (list of datetime.date): Dates to calculate entity states as of
         """
-        
+
         self._maybe_create_entity_date_table()
         logger.spam(f"Inserting rows into entity_date table {self.entity_date_table_name}")
-        
+
         for as_of_date in as_of_dates:
             formatted_date = f"{as_of_date.isoformat()}"
             logger.spam(f"Looking for existing entity_date rows for as of date {as_of_date}")
 
             with self.db_engine.begin() as conn:
-                result = conn.execute(text(
-                    f"""select 1 from {self.entity_date_table_name}
-                    where as_of_date = '{formatted_date}'
-                    limit 1
-                    """
-                ))
+                # Use database adapter for checking existing entity_date records
+                if self.db_adapter:
+                    check_query = self.db_adapter.get_entity_date_check_query(
+                        self.entity_date_table_name, formatted_date
+                    )
+                else:
+                    # Fallback to PostgreSQL syntax
+                    check_query = f"""select 1 from {self.entity_date_table_name}
+                                     where as_of_date = '{formatted_date}'
+                                     limit 1"""
+
+                result = conn.execute(text(check_query))
                 any_existing = list(result)
 
             if len(any_existing) == 1:
@@ -254,18 +294,26 @@ class SubsetEntityDateTableGenerator(EntityDateTableGenerator):
                 continue
 
             dated_query = self.query.format(as_of_date=formatted_date)
-            full_query = f"""insert into {self.entity_date_table_name}
-                select q.entity_id, '{formatted_date}'::timestamp, true
-                from (
-                    with subset as ({dated_query})
-                    select
-                        c. entity_id
-                    from subset s inner join {self.cohort_table} c
-                    on s.entity_id = c.entity_id
-                    and c.as_of_date = '{formatted_date}'::date
-                ) q
-                group by 1, 2, 3
-            """
+
+            # Use database adapter for subset entity_date insert query
+            if self.db_adapter:
+                full_query = self.db_adapter.get_subset_entity_date_insert_query(
+                    self.entity_date_table_name, formatted_date, dated_query, self.cohort_table
+                )
+            else:
+                # Fallback to PostgreSQL syntax
+                full_query = f"""insert into {self.entity_date_table_name}
+                    select q.entity_id, '{formatted_date}'::timestamp, true
+                    from (
+                        with subset as ({dated_query})
+                        select
+                            c. entity_id
+                        from subset s inner join {self.cohort_table} c
+                        on s.entity_id = c.entity_id
+                        and c.as_of_date = '{formatted_date}'::date
+                    ) q
+                    group by 1, 2, 3"""
+
             logger.spam(f"Running entity_date query for date: {as_of_date}, {full_query}")
 
             with self.db_engine.begin() as conn:

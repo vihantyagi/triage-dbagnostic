@@ -482,9 +482,9 @@ class ExperimentBase(ABC):
             model_storage_engine=self.model_storage_engine,
             model_grouper=ModelGrouper(
                 self.config.get("model_group_keys", []),
-                db_adapter=self.db_adapter
             ),
             db_engine=self.db_engine,
+            db_adapter=self.db_adapter,
             replace=self.replace,
             run_id=self.run_id,
         )

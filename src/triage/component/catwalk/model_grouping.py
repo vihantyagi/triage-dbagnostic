@@ -97,58 +97,28 @@ class ModelGrouper:
                 model_config=model_config,
             )
 
-    def get_model_group_id(self, class_path, parameters, matrix_metadata, db_engine):
+    def get_model_group_id(self, class_path, parameters, matrix_metadata, db_adapter):
         """
-        Returns model group id using store procedure 'get_model_group_id' which will
-        return the same value for models with the same class_path, parameters,
-        features, and model_config
+        Returns model group id using database adapter which handles database-specific
+        implementation details. Returns the same value for models with the same
+        class_path, parameters, features, and model_config.
 
         Args:
             class_path (string) A full classpath to the model class
             parameters (dict) hyperparameters to give to the model constructor
             matrix_metadata (dict) stored metadata about the train matrix
-            db_engine (sqlalchemy.engine) A database engine pointing to a database with
-             a results.model_groups table and get_model_group_id stored procedure
+            db_adapter (DatabaseAdapter) Database adapter for database-specific operations
 
         Returns: (int) a database id for the model group id
         """
         model_group_args = self._final_model_group_args(
             class_path, parameters, matrix_metadata
         )
-        db_conn = db_engine.raw_connection()
-        cur = db_conn.cursor()
-        cur.execute(
-            "SELECT EXISTS ( "
-            "       SELECT * "
-            "       FROM pg_catalog.pg_proc "
-            "       WHERE proname = 'get_model_group_id' ) "
+
+        # Delegate to database adapter for database-specific implementation
+        return db_adapter.get_model_group_id(
+            class_path=model_group_args["class_path"],
+            parameters=model_group_args["parameters"],
+            feature_names=model_group_args["feature_names"],
+            model_config=model_group_args["model_config"]
         )
-        condition = cur.fetchone()
-
-        if condition:
-            query = (
-                "SELECT get_model_group_id( "
-                "            '{class_path}'::TEXT, "
-                "            '{parameters}'::JSONB, "
-                "             ARRAY{feature_names}::TEXT [] , "
-                "            '{model_config}'::JSONB )".format(
-                    class_path=model_group_args["class_path"],
-                    parameters=json.dumps(model_group_args["parameters"]),
-                    feature_names=list(model_group_args["feature_names"]),
-                    model_config=json.dumps(
-                        model_group_args["model_config"], sort_keys=True
-                    ),
-                )
-            )
-            logger.spam(f"Getting model group from query {query}")
-            cur.execute(query)
-            db_conn.commit()
-            model_group_id = cur.fetchone()
-            model_group_id = model_group_id[0]
-
-        else:
-            logger.warning("Could not found stored procedure public.model_group_id")
-            model_group_id = None
-        db_conn.close()
-
-        return model_group_id

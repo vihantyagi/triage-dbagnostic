@@ -57,6 +57,7 @@ class ModelTrainer:
         model_storage_engine (catwalk.storage.ModelStorageEngine)
         db_engine (sqlalchemy.engine)
         replace (bool) whether or not to replace existing versions of models
+        db_adapter (DatabaseAdapter) database adapter for database-specific operations
     """
 
     def __init__(
@@ -67,11 +68,13 @@ class ModelTrainer:
         model_grouper=None,
         replace=True,
         run_id=None,
+        db_adapter=None,
     ):
         self.experiment_hash = experiment_hash
         self.model_storage_engine = model_storage_engine
         self.model_grouper = model_grouper or ModelGrouper()
         self.db_engine = db_engine
+        self.db_adapter = db_adapter
         self.replace = replace
         self.run_id = run_id
         self.experiment_random_seed = retrieve_experiment_seed_from_run_id(self.db_engine, self.run_id)
@@ -305,7 +308,7 @@ class ModelTrainer:
             
         else:
             model_group_id = self.model_grouper.get_model_group_id(
-                class_path, unique_parameters, matrix_store.metadata, self.db_engine
+                class_path, unique_parameters, matrix_store.metadata, self.db_adapter
             )
 
         # Writing th model to storage, then getting its size in kilobytes.
@@ -501,7 +504,7 @@ class ModelTrainer:
 
             unique_parameters = self.unique_parameters(parameters)
             model_group_id = self.model_grouper.get_model_group_id(
-                class_path, unique_parameters, matrix_store.metadata, self.db_engine
+                class_path, unique_parameters, matrix_store.metadata, self.db_adapter
             )
             random_seed = self.get_or_generate_random_seed(
                 model_group_id, matrix_store.metadata, matrix_store.uuid
