@@ -551,7 +551,7 @@ class Aggregation:
             columns += self._get_aggregates_sql(group)
 
             gb_clause = make_sql_clause(groupby, ex.literal_column)
-            query = ex.select(columns=columns, from_obj=make_sql_clause(self.from_obj, ex.text)).group_by(
+            query = ex.select(*columns).select_from(make_sql_clause(self.from_obj, ex.text)).group_by(
                 gb_clause
             )
 
