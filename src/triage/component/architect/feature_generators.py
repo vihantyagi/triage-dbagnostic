@@ -500,7 +500,7 @@ class FeatureGenerator:
         nullcols = []
         with self.db_engine.begin() as conn:
             for agg in aggs:
-                results = conn.execute(agg.find_nulls(imputed=True))
+                results = conn.execute(text(agg.find_nulls(imputed=True)))
                 null_counts = results.first().items()
                 nullcols += [col for (col, val) in null_counts if val > 0]
 
@@ -713,7 +713,7 @@ class FeatureGenerator:
         # excute query to find columns with null values and create lists of columns
         # that do and do not need imputation when creating the imputation table
         with self.db_engine.begin() as conn:
-            results = conn.execute(aggregation.find_nulls())
+            results = conn.execute(text(aggregation.find_nulls()))
             null_counts = results.first().items()
         if impute_cols is None:
             impute_cols = [col for (col, val) in null_counts if val > 0]
