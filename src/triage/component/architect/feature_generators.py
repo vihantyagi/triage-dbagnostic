@@ -568,8 +568,8 @@ class FeatureGenerator:
                 if isinstance(command, str):
                     conn.execute(text(command))
                 else:
-                    # TODO check the use case of inherit_cache parameter. 
-                    conn.execute(command, inherit_cache=True)
+                    # TODO check the use case of inherit_cache parameter or suppress the warning
+                    conn.execute(command)
 
     def _aggregation_index_query(self, aggregation, imputed=False):
         table_name = aggregation.get_table_name(imputed=imputed)
