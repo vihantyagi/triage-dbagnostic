@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import logging
 from matplotlib.lines import Line2D
+from sqlalchemy import text
 
 import warnings
 
@@ -48,7 +49,7 @@ def list_all_experiments(engine):
     """
     
     q = '''
-        select 
+        select
             id,
             run_hash as experiment_hash,
             max(start_time) as most_recent_start_time,
@@ -58,20 +59,22 @@ def list_all_experiments(engine):
         where current_status = 'completed'
         group by 1 order by 1 desc
     '''
-    
-    return pd.read_sql(q, engine)
+
+    with engine.begin() as conn:
+        return pd.read_sql(text(q), conn)
 
 def load_config(engine, experiment_hash):
     "return the experiment config"
     
     q = f'''
-        select 
-        config 
+        select
+        config
         from triage_metadata.experiments
         where experiment_hash = '{experiment_hash}'
     '''
-    
-    return pd.read_sql(q, engine).config.at[0]
+
+    with engine.begin() as conn:
+        return pd.read_sql(text(q), conn).config.at[0]
     
 
 def load_report_parameters_from_config(engine, experiment_hash):
@@ -93,13 +96,14 @@ def load_report_parameters_from_config(engine, experiment_hash):
   
 def get_most_recent_experiment_hash(engine):
     q = '''
-        select 
+        select
             run_hash as experiment_hash
         from triage_metadata.triage_runs
         where current_status = 'completed'
-        order by start_time desc       
+        order by start_time desc
     '''
-    experiment_hash = pd.read_sql(q, engine)['experiment_hash'].iloc[0]
+    with engine.begin() as conn:
+        experiment_hash = pd.read_sql(text(q), conn)['experiment_hash'].iloc[0]
     logging.info(f'Using the experiment hash: {experiment_hash}')
     
     return experiment_hash
@@ -127,16 +131,17 @@ class ExperimentReport:
 
         Args:
             engine (SQLAlchemy): DB engine
-            experiment_hash (str): Experiment hash we are interested in  
+            experiment_hash (str): Experiment hash we are interested in
         """
-        
+
         q = f'''
-            select 
+            select
                 config
             from triage_metadata.experiments where experiment_hash = '{self.experiment_hashes[0]}'
         '''
 
-        experiment_config = pd.read_sql(q, self.engine).at[0, 'config']
+        with self.engine.begin() as conn:
+            experiment_config = pd.read_sql(text(q), conn).at[0, 'config']
         
         
         chops = Timechop(**experiment_config['temporal_config'])
@@ -154,26 +159,28 @@ class ExperimentReport:
             engine (SQLAlchemy): Database engine
             experiment_hash (str): a list of experiment hashes
         """
-        
+
         get_labels_table_query = f"""
-        select distinct labels_table_name from triage_metadata.triage_runs 
+        select distinct labels_table_name from triage_metadata.triage_runs
         where run_hash = '{self.experiment_hashes[0]}'
         """
 
-        labels_table = pd.read_sql(get_labels_table_query, self.engine).labels_table_name.iloc[0]
+        with self.engine.begin() as conn:
+            labels_table = pd.read_sql(text(get_labels_table_query), conn).labels_table_name.iloc[0]
         # print(labels_table)
         cohort_query = f"""
-            select 
-            label_name, 
-            label_timespan, 
-            as_of_date, 
-            count(distinct entity_id) as cohort_size, 
-            avg(label) as baserate 
+            select
+            label_name,
+            label_timespan,
+            as_of_date,
+            count(distinct entity_id) as cohort_size,
+            avg(label) as baserate
             from public.{labels_table}
             group by 1,2,3 order by 1,2,3
         """
 
-        df = pd.read_sql(cohort_query, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(cohort_query), conn)
         
         if generate_plots:
             fig, ax1 = plt.subplots(figsize=(7, 3), dpi=100)
@@ -221,7 +228,8 @@ class ExperimentReport:
             where experiment_hash in ('{"','".join(self.experiment_hashes)}')
         '''
         
-        df = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(q), conn)
         
         df['table_name'] = df.table_name.apply(lambda x: f'subet_{x}')
 
@@ -250,7 +258,8 @@ class ExperimentReport:
             order by 2
         '''
 
-        model_groups = pd.read_sql(mg_query_selected_exp.format("','".join(self.experiment_hashes)), self.engine)
+        with self.engine.begin() as conn:
+            model_groups = pd.read_sql(text(mg_query_selected_exp.format("','".join(self.experiment_hashes))), conn)
         
         #TODO - highlight model groups that don't have the "correct" number of models built. 
         # Some model objects can be missing, and some train_end_times can have multiple models
@@ -277,7 +286,8 @@ class ExperimentReport:
             order by model_type
             '''
 
-        df = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(q), conn)
 
         return df.sort_values(by=['model_group_id', 'train_end_time'])      
        
@@ -298,7 +308,8 @@ class ExperimentReport:
             from triage_metadata.experiments where experiment_hash = '{self.experiment_hashes[0]}'
         '''
 
-        experiment_config = pd.read_sql(q, self.engine).at[0, 'config']
+        with self.engine.begin() as conn:
+            experiment_config = pd.read_sql(text(q), conn).at[0, 'config']
         
         all_features = list()
 
@@ -360,7 +371,8 @@ class ExperimentReport:
         and table_name like '%%aggregation_imputed'
         '''
 
-        feature_tables = pd.read_sql(q, self.engine)['table_name'].tolist()
+        with self.engine.begin() as conn:
+            feature_tables = pd.read_sql(text(q), conn)['table_name'].tolist()
         
         logging.info(f'Printing only features with missing values')
         
@@ -375,7 +387,8 @@ class ExperimentReport:
                 and (column_name like '%%_imp')   
             '''
 
-            column_names[table] = pd.read_sql(q, self.engine).column_name.tolist()
+            with self.engine.begin() as conn:
+                column_names[table] = pd.read_sql(text(q), conn).column_name.tolist()
             
         results = pd.DataFrame()
 
@@ -398,7 +411,8 @@ class ExperimentReport:
             '''
             
             query = select_clause + imputation_counts + from_clause
-            df = pd.read_sql(query, self.engine).set_index(['as_of_date', 'cohort_size'])
+            with self.engine.begin() as conn:
+                df = pd.read_sql(text(query), conn).set_index(['as_of_date', 'cohort_size'])
 
             if results.empty:
                 results = df
@@ -455,7 +469,8 @@ class ExperimentReport:
         '''
 
 
-        df = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(q), conn)
         df['train_end_time'] = pd.to_datetime(df.train_end_time, format='%Y-%m-%d')
         
         models_per_train_end_time = df.groupby(['model_group_id', 'train_end_time']).count()['model_id']
@@ -528,7 +543,8 @@ class ExperimentReport:
             where experiment_hash in ('{"','".join(self.experiment_hashes)}')
         '''
         
-        df = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(q), conn)
         
         if (df.empty) or (None in df.subset.unique()):
             return None
@@ -543,7 +559,8 @@ class ExperimentReport:
         where run_hash = '{self.experiment_hashes[0]}'
         """
 
-        labels_table = pd.read_sql(get_labels_table_query, self.engine).labels_table_name.iloc[0]
+        with self.engine.begin() as conn:
+            labels_table = pd.read_sql(text(get_labels_table_query), conn).labels_table_name.iloc[0]
 
         if generate_plot:        
             grpobj = df.groupby('subset')
@@ -561,7 +578,8 @@ class ExperimentReport:
                     group by 1
                     order by 1
                 '''
-                subset_size = pd.read_sql(q, self.engine)
+                with self.engine.begin() as conn:
+                    subset_size = pd.read_sql(text(q), conn)
                 
                 # Subset sizes over time
                 color='tab:blue'
@@ -665,7 +683,8 @@ class ExperimentReport:
                 order by 1,2
             '''
             
-            rg = pd.read_sql(q, self.engine)
+            with self.engine.begin() as conn:
+                rg = pd.read_sql(text(q), conn)
             
             # if there are no bias audit results in the DB
             if rg.empty:
@@ -710,7 +729,8 @@ class ExperimentReport:
                 order by 1,2
             '''
             
-            rg = pd.read_sql(q, self.engine)
+            with self.engine.begin() as conn:
+                rg = pd.read_sql(text(q), conn)
             
             if rg.empty:
                 logging.warning('No bias audit config or aequitas calculation was not completed! check the test_results.aequitas table. No plots generated')
@@ -770,7 +790,8 @@ class ExperimentReport:
         '''
         
         #and a.attribute_value in ('{', '.join(attribute_values)}')
-        metrics = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            metrics = pd.read_sql(text(q), conn)
 
         # metrics['Model Class'] = metrics['model_type'].apply(lambda x: x.split('.')[-1])
         # metrics['model_label'] = metrics.apply(lambda x: f"{x['model_group_id']}: {x['model_type'].split('.')[-1]}", axis=1)
@@ -894,7 +915,8 @@ class ExperimentReport:
             where experiment_hash in ('{"','".join(self.experiment_hashes)}')
         '''
         
-        return pd.read_sql(q, self.engine).to_dict(orient='records')[0]
+        with self.engine.begin() as conn:
+            return pd.read_sql(text(q), conn).to_dict(orient='records')[0]
     
           
     def generate_summary(self, metric=None, parameter=None, equity_metric=None):
@@ -1050,7 +1072,8 @@ class ExperimentReport:
             order by model_type, mean_performance desc
         '''
 
-        best_models = pd.read_sql(q, self.engine).set_index('model_group_id').sort_values(by='mean_performance', ascending=False)
+        with self.engine.begin() as conn:
+            best_models = pd.read_sql(text(q), conn).set_index('model_group_id').sort_values(by='mean_performance', ascending=False)
         best_models['model_type'] = best_models['model_type'].str.split('.').apply(lambda x: x[-1])
             
         return best_models
@@ -1080,7 +1103,8 @@ class ExperimentReport:
             limit {n_model_groups};
         '''
         
-        df = pd.read_sql(q, self.engine)
+        with self.engine.begin() as conn:
+            df = pd.read_sql(text(q), conn)
         
         return df.model_group_id.tolist(), df
     
