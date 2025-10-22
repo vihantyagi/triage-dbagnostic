@@ -3,6 +3,7 @@ from triage.component.catwalk.utils import db_retry, filename_friendly_hash
 
 import re
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 import verboselogs, logging
 logger = verboselogs.VerboseLogger(__name__)
 
@@ -165,9 +166,9 @@ def get_feature_needs_imputation_in_production(aggregation, db_engine):
         db_engine (sqlalchemy.db.engine)
     """
     with db_engine.begin() as conn:
-        nulls_results = conn.execute(aggregation.find_nulls())
+        nulls_results = conn.execute(text(aggregation.find_nulls()))
     
-    null_counts = nulls_results.first().items()
+    null_counts = nulls_results.first()._mapping.items()
     features_imputed_in_production = [col for (col, val) in null_counts if val is not None and val > 0]
     
     return features_imputed_in_production
