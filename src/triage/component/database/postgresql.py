@@ -297,7 +297,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         return f"""
             with dates as (
-                select {dates_clause} as as_of_date
+                select unnest(array{as_of_dates}::timestamp[]) as as_of_date
             )
             select *
             from {table_name}
