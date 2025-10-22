@@ -297,7 +297,7 @@ class PostgreSQLAdapter(DatabaseAdapter):
 
         return f"""
             with dates as (
-                select * from {dates_clause} as as_of_date
+                select {dates_clause} as as_of_date
             )
             select *
             from {table_name}
