@@ -415,7 +415,7 @@ class MatrixBuilder(BuilderBase):
             matrix_uuid=matrix_uuid,
             matrix_type=matrix_type,
             labeling_window=matrix_metadata["label_timespan"],
-            num_observations=row_count[0], #row count is a tuple
+            num_observations=row_count, #row count is a scalar from result.scalar()
             lookback_duration=lookback,
             feature_start_time=matrix_metadata["feature_start_time"],
             feature_dictionary=feature_dictionary,

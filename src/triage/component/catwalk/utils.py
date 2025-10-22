@@ -18,6 +18,7 @@ import postgres_copy
 import sqlalchemy
 from retrying import retry
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import text
 from ohio import PipeTextIO
 
 from triage.component.results_schema import (
@@ -109,10 +110,12 @@ def missing_matrix_uuids(experiment_hash, db_engine):
         from {ExperimentMatrix.__table__.fullname} experiment_matrices
         left join {Matrix.__table__.fullname} matrices
         on (experiment_matrices.matrix_uuid = matrices.matrix_uuid)
-        where experiment_hash = %s
+        where experiment_hash = :experiment_hash
         and matrices.matrix_uuid is null
     """
-    return [row[0] for row in db_engine.execute(query, experiment_hash)]
+    with db_engine.begin() as conn:
+        result = conn.execute(text(query), {"experiment_hash": experiment_hash})
+        return [row[0] for row in result]
 
 
 @db_retry
@@ -126,10 +129,12 @@ def missing_model_hashes(experiment_hash, db_engine):
         from {ExperimentModel.__table__.fullname} experiment_models
         left join {Model.__table__.fullname} models
         on (experiment_models.model_hash = models.model_hash)
-        where experiment_hash = %s
+        where experiment_hash = :experiment_hash
         and models.model_hash is null
     """
-    return [row[0] for row in db_engine.execute(query, experiment_hash)]
+    with db_engine.begin() as conn:
+        result = conn.execute(text(query), {"experiment_hash": experiment_hash})
+        return [row[0] for row in result]
 
 
 class Batch:
@@ -281,10 +286,9 @@ def retrieve_existing_model_random_seeds(
         order by models.run_time DESC, random()
     """
     logging.debug(f"Query that will retrieve random seeds for the model: {query}")
-    return [
-        row[0]
-        for row in db_engine.execute(query)
-    ]
+    with db_engine.begin() as conn:
+        result = conn.execute(text(query))
+        return [row[0] for row in result]
 
 
 @db_retry
