@@ -13,20 +13,21 @@ from psycopg2.extras import DateRange, DateTimeRange
 from datetime import date, datetime
 
 
-def serialize_to_database(obj):
+def serialize_to_database(obj, url=None):
     """JSON serializer for objects not serializable by default json code"""
 
     if isinstance(obj, date):
         return str(obj.isoformat())
 
-    if isinstance(obj, (DateRange, DateTimeRange)):
-        return f"[{obj.lower}, {obj.upper}]"
+    if url and url.drivername in ('postgresql', 'postgresql+psycopg2', 'postgresql+psycopg2cffi'):
+        if isinstance(obj, (DateRange, DateTimeRange)):
+            return f"[{obj.lower}, {obj.upper}]"
 
     return obj
 
 
-def json_dumps(d):
-    return json.dumps(d, default=serialize_to_database)
+def json_dumps(d, url=None):
+    return json.dumps(d, default=lambda obj: serialize_to_database(obj, url))
 
 
 
@@ -45,7 +46,7 @@ class SerializableDbEngine(wrapt.ObjectProxy):
 
         # Add json_serializer for PostgreSQL only
         if self.url.drivername in ('postgresql', 'postgresql+psycopg2', 'postgresql+psycopg2cffi'):
-            kwargs['json_serializer'] = json_dumps
+            kwargs['json_serializer'] = lambda d: json_dumps(d, self.url)
 
         engine = creator(url, **kwargs)
         super().__init__(engine)
